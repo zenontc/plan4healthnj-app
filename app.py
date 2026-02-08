@@ -62,10 +62,9 @@ coefficients = get_coefficients(df, drivers, outcomes)
 
 # --- 5. UI Layout ---
 st.set_page_config(layout="wide", page_title="NJ Health & Planning Tool")
-st.title("NJ Municipal Health & Planning Simulator")
+st.title("NJ Municipal Planning and Public Health Tool")
 st.markdown("""
-This tool simulates how changes in the **built environment** and **social factors** (drivers) 
-might impact **public health outcomes** in New Jersey municipalities.
+This tool models how changes in factors that can be impacted through Planning might impact public health outcomes in New Jersey municipalities.
 """)
 
 # Sidebar: Select Municipality
@@ -89,7 +88,7 @@ baseline_data = df[df['Municipality and County'] == selected_muni].iloc[0]
 
 # Sidebar: Drivers
 st.sidebar.header("2. Adjust Planning Factors")
-st.sidebar.markdown("Use sliders to simulate improvements or decline.")
+st.sidebar.markdown("Use sliders to show changes.")
 
 # Reset Button
 if st.sidebar.button("Reset to Baseline"):
@@ -195,3 +194,4 @@ for i, outcome in enumerate(outcomes):
 
 st.markdown("---")
 st.caption("*Note: This simulator uses linear regression with a damping factor for conservative estimation. Driver interdependencies (e.g., Transportation impacting Food Insecurity) are included in the logic.*")
+
