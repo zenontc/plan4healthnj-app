@@ -52,4 +52,29 @@ with col2:
     st.metric(label="Prevalence Rate", value=f"{crude_prevalence}/1,000")
 
 with col3:
-    st.
+    st.metric(label="Estimated Total Cases", value=f"{planned_cases:,}")
+
+---
+
+# --- DATA BREAKDOWN ---
+st.subheader("📊 Planning Breakdown")
+
+# Breakdown of cases by demographic or severity (Example)
+# We apply actual values to these subgroups now
+data = {
+    "Category": ["Mild / Routine", "Moderate / Urgent", "Severe / Hospitalization"],
+    "Factor of Total Cases": [0.70, 0.20, 0.10], # Proportions of the planned cases
+}
+
+df = pd.DataFrame(data)
+df["Actual Expected Count"] = (df["Factor of Total Cases"] * planned_cases).astype(int)
+
+# Formatting for display
+st.table(df[["Category", "Actual Expected Count"]])
+
+st.info(f"**Note:** This model assumes a crude prevalence of {crude_prevalence} per 1,000. "
+        f"For a population of {total_population:,}, your facility should prepare for {planned_cases:,} cases.")
+
+# --- NEXT STEPS ---
+# Would you like me to add a 'Staffing Ratio' section where we calculate how many nurses/doctors 
+# you need based on these actual case counts?
