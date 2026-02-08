@@ -93,7 +93,7 @@ baseline_data = df[df['Municipality and County'] == selected_muni].iloc[0]
 
 # Sidebar: Drivers
 st.sidebar.header("2. Adjust Factors")
-st.sidebar.markdown("Use sliders to show changes. The percent factors (Physical Inactivity to Social Isolation) are the percentage of the population over 18 affected by the issue.")
+st.sidebar.markdown("Use sliders to show changes. Physical Inactivity to Social Isolation factors are the percentage of the population over 18 affected by the issue.")
 
 if st.sidebar.button("Reset to Baseline"):
     for d in drivers:
@@ -203,5 +203,6 @@ for i, outcome in enumerate(outcomes):
 
 st.markdown("---")
 st.caption("*Note: Physical Inactivity is now positioned as a driver influenced by Crime and Transportation. All projections use a 0.4 damping factor.*")
+
 
 
