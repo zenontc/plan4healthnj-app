@@ -2,22 +2,29 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
+import numpy as np
 
-# --- 1. Load and Prep Data ---
+# --- 1. Load Data ---
 @st.cache_data
 def load_data():
-    # Load the pre-calculated municipal data
     df = pd.read_csv('NJ_Municipal_Health_Data.csv')
+    df.columns = df.columns.str.strip()
     return df
 
-df = load_data()
+try:
+    df = load_data()
+except Exception as e:
+    st.error(f"Error loading CSV: {e}")
+    st.stop()
 
-# --- 2. Define Drivers (Inputs) and Outcomes (Outputs) ---
+# --- 2. Configuration: Drivers & Outcomes ---
 drivers = [
+    'Median HH Income',
     'Crime Index',
     'Transportation barriers crude prevalence (%)',
     'Food insecurity crude prevalence (%)',
     'Housing insecurity crude prevalence (%)',
+    'Utilities services threat crude prevalence (%)',
     'Social isolation crude prevalence (%)'
 ]
 
@@ -25,137 +32,145 @@ outcomes = [
     'Physical inactivity crude prevalence (%)',
     'Obesity crude prevalence (%)',
     'Diabetes crude prevalence (%)',
+    'Frequnt physical distress crude prevalence (%)', # Typo in CSV
+    'Depression crude prevalence (%)',
     'Frequent mental distress crude prevalence (%)',
     'Fair or poor health crude prevalence (%)'
 ]
 
-# --- 3. Calculate Statistical Relationships (Simple Linear Regression) ---
-# We calculate the sensitivity of each outcome to each driver individually.
-# This coefficient represents "How much does Outcome Y change if Driver X increases by 1 unit?"
-coefficients = {}
+# --- 3. Advanced Modeling (Multiple Regression for Conservatism) ---
+@st.cache_resource
+def train_models(_df, drivers, outcomes):
+    models = {}
+    # Train a Multiple Regression for each outcome to be more conservative
+    for outcome in outcomes:
+        valid_df = _df[drivers + [outcome]].dropna()
+        X = valid_df[drivers]
+        y = valid_df[outcome]
+        models[outcome] = LinearRegression().fit(X, y)
+    
+    # Cascade Model: Transportation impacts Food Insecurity
+    # We'll calculate how much Food Insecurity changes per unit of Transportation
+    cascade_df = _df[['Transportation barriers crude prevalence (%)', 'Food insecurity crude prevalence (%)']].dropna()
+    cascade_model = LinearRegression().fit(cascade_df[['Transportation barriers crude prevalence (%)']], cascade_df['Food insecurity crude prevalence (%)'])
+    
+    return models, cascade_model
 
-for outcome in outcomes:
-    coefficients[outcome] = {}
-    for driver in drivers:
-        # Fit a simple linear regression for each pair
-        X = df[[driver]].fillna(df[driver].mean())
-        y = df[outcome].fillna(df[outcome].mean())
-        model = LinearRegression().fit(X, y)
-        coefficients[outcome][driver] = model.coef_[0]
+models, cascade_model = train_models(df, drivers, outcomes)
 
 # --- 4. Streamlit UI Layout ---
-st.set_page_config(layout="wide", page_title="NJ Health & Planning Tool")
+st.set_page_config(layout="wide", page_title="NJ Health Simulator")
+
+# Session State for Resetting Sliders
+if 'reset_key' not in st.session_state:
+    st.session_state.reset_key = 0
+
+def reset_sliders():
+    st.session_state.reset_key += 1
 
 st.title("NJ Municipal Health & Planning Simulator")
-st.markdown("""
-This tool simulates how changes in the **built environment** and **social factors** (drivers) 
-might impact **public health outcomes** in New Jersey municipalities.
-""")
+st.sidebar.button("Reset Sliders to Baseline", on_click=reset_sliders)
 
 # Sidebar: Select Municipality
 st.sidebar.header("1. Select Municipality")
 muni_list = sorted(df['Municipality and County'].unique())
 selected_muni = st.sidebar.selectbox("Choose a Municipality:", muni_list)
-
-# Get baseline data for selected muni
 baseline_data = df[df['Municipality and County'] == selected_muni].iloc[0]
 
-# Sidebar: Adjust Drivers
+# Sidebar: Sliders
 st.sidebar.header("2. Adjust Planning Factors")
-st.sidebar.markdown("Use sliders to simulate improvements or decline.")
+adj_vals = {}
 
-adjustment_deltas = {}
+# We create sliders in the specific order requested
+slider_order = [
+    ('Median HH Income', "$", 500.0),
+    ('Crime Index', "", 1.0),
+    ('Transportation barriers crude prevalence (%)', "%", 0.1),
+    ('Food insecurity crude prevalence (%)', "%", 0.1),
+    ('Housing insecurity crude prevalence (%)', "%", 0.1),
+    ('Utilities services threat crude prevalence (%)', "%", 0.1),
+    ('Social isolation crude prevalence (%)', "%", 0.1),
+]
 
-for driver in drivers:
-    current_val = baseline_data[driver]
+for driver, unit, step in slider_order:
+    base_val = float(baseline_data[driver])
+    max_range = max(float(df[driver].max()), base_val * 2)
     
-    # Create a slider centered at the current value
-    min_val = 0.0
-    max_val = max(float(df[driver].max()), current_val * 2)
+    # Display logic for "Income" vs others
+    label = driver.replace(" crude prevalence (%)", "")
     
-    new_val = st.sidebar.slider(
-        f"{driver}",
-        min_value=min_val,
-        max_value=max_val,
-        value=float(current_val),
-        format="%.1f"
+    adj_vals[driver] = st.sidebar.slider(
+        label,
+        min_value=0.0,
+        max_value=max_range,
+        value=base_val,
+        step=step,
+        format=f"{unit}%.1f" if unit == "$" else "%.1f",
+        key=f"{driver}_{st.session_state.reset_key}"
     )
-    
-    # Calculate the change (delta)
-    adjustment_deltas[driver] = new_val - current_val
 
-# --- 5. Calculate Predicted Outcomes ---
-predicted_values = {}
+# --- 5. Calculation Logic with Cascading Effect ---
+# 1. Calculate Transportation Delta
+trans_delta = adj_vals['Transportation barriers crude prevalence (%)'] - baseline_data['Transportation barriers crude prevalence (%)']
 
+# 2. Update Food Insecurity based on Transportation (Cascade)
+# If user changed Transportation, it slightly pushes Food Insecurity
+food_insecure_cascade = trans_delta * cascade_model.coef_[0]
+effective_inputs = pd.DataFrame([adj_vals])
+# We add the cascade effect to the food insecurity input for the final calculation
+effective_inputs['Food insecurity crude prevalence (%)'] += food_insecure_cascade
+
+# 3. Predict Health Outcomes
+predicted_results = {}
 for outcome in outcomes:
-    total_change = 0
-    # We sum the effects of all driver changes
-    # Note: This assumes effects are additive, which is a simplification for simulation purposes.
-    for driver in drivers:
-        coeff = coefficients[outcome][driver]
-        delta = adjustment_deltas[driver]
-        total_change += delta * coeff
-    
-    # Apply change to baseline
-    baseline_val = baseline_data[outcome]
-    predicted_val = max(0, baseline_val + total_change) # Ensure no negative prevalence
-    predicted_values[outcome] = predicted_val
+    pred = models[outcome].predict(effective_inputs)[0]
+    predicted_results[outcome] = max(0, pred)
 
 # --- 6. Visualization ---
+results_mapping = {
+    'Physical inactivity crude prevalence (%)': 'Physical Inactivity',
+    'Obesity crude prevalence (%)': 'Obesity',
+    'Diabetes crude prevalence (%)': 'Diabetes',
+    'Frequnt physical distress crude prevalence (%)': 'Phys. Distress',
+    'Depression crude prevalence (%)': 'Depression',
+    'Frequent mental distress crude prevalence (%)': 'Mental Distress',
+    'Fair or poor health crude prevalence (%)': 'Poor Health'
+}
 
-# Comparison Data Structure
-results = []
+chart_data = []
 for outcome in outcomes:
-    results.append({
-        "Measure": outcome.replace(" crude prevalence (%)", ""),
+    chart_data.append({
+        "Measure": results_mapping[outcome],
         "Baseline": baseline_data[outcome],
-        "Simulated": predicted_values[outcome]
+        "Simulated": predicted_results[outcome]
     })
-    
-results_df = pd.DataFrame(results)
+results_df = pd.DataFrame(chart_data)
 
-# Plotly Bar Chart
 fig = go.Figure()
-
-fig.add_trace(go.Bar(
-    x=results_df["Measure"],
-    y=results_df["Baseline"],
-    name='Current Baseline',
-    marker_color='lightslategray'
-))
-
-fig.add_trace(go.Bar(
-    x=results_df["Measure"],
-    y=results_df["Simulated"],
-    name='Simulated Scenario',
-    marker_color='royalblue'
-))
-
-fig.update_layout(
-    title=f"Projected Health Outcomes for {selected_muni}",
-    yaxis_title="Prevalence (%)",
-    barmode='group',
-    height=500
-)
-
+fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Baseline"], name='Baseline', marker_color='lightslategray'))
+fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Simulated"], name='Simulated', marker_color='royalblue'))
+fig.update_layout(title=f"Projected Health Outcomes: {selected_muni}", barmode='group', height=450)
 st.plotly_chart(fig, use_container_width=True)
 
-# --- 7. Detailed Metrics Table ---
+# --- 7. Detailed Metrics ---
 st.subheader("Detailed Projections")
 cols = st.columns(len(outcomes))
 
 for i, outcome in enumerate(outcomes):
-    baseline = baseline_data[outcome]
-    predicted = predicted_values[outcome]
-    change = predicted - baseline
+    base = baseline_data[outcome]
+    sim = predicted_results[outcome]
+    diff = sim - base
     
     with cols[i]:
-        st.metric(
-            label=outcome.replace(" crude prevalence (%)", ""),
-            value=f"{predicted:.1f}%",
-            delta=f"{change:.1f}%",
-            delta_color="inverse" # Negative change (drop in disease) is green (good)
-        )
+        # Logic for gray 0.0% with no arrow
+        if abs(diff) < 0.01:
+            st.metric(label=results_mapping[outcome], value=f"{sim:.1f}%", delta=None)
+        else:
+            st.metric(
+                label=results_mapping[outcome], 
+                value=f"{sim:.1f}%", 
+                delta=f"{diff:.1f}%", 
+                delta_color="inverse"
+            )
 
-st.markdown("---")
-st.caption("*Note: This model uses simple linear regression coefficients derived from NJ municipal data. It assumes additive effects and is for planning simulation purposes only.*")
+st.caption("Note: This model uses Multiple Linear Regression and a cascading link between Transportation and Food Insecurity.")
