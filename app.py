@@ -42,7 +42,7 @@ outcomes = [
 
 # Mapping for cleaner labels in the UI
 labels = {
-    'Median HH Income': 'Median Household Income ($)',
+    'Median HH Income': 'Median Household Income',
     'Crime Index': 'Crime Index (AGS)',
     'Transportation barriers crude prevalence (%)': 'Transportation Barriers',
     'Food insecurity crude prevalence (%)': 'Food Insecurity',
@@ -226,3 +226,4 @@ for i, outcome in enumerate(outcomes):
 
 st.markdown("---")
 st.caption("*Note: 'Frequnt Physical Distress' retains the spelling from the source dataset.*")
+
