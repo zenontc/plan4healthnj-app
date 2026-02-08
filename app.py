@@ -67,7 +67,7 @@ def get_coefficients(_df, _drivers, _outcomes):
 coefficients = get_coefficients(df, drivers, outcomes)
 
 # --- 5. UI Layout ---
-st.set_page_config(layout="wide", page_title="NJ Health & Planning Tool")
+st.set_page_config(layout="wide", page_title="NJ Planning and Public Health Tool")
 st.title("NJ Municipal Planning and Public Health Tool")
 st.markdown("""
 This tool models how changes in factors that can be impacted through Planning might impact public health outcomes in New Jersey municipalities.
@@ -203,4 +203,5 @@ for i, outcome in enumerate(outcomes):
 
 st.markdown("---")
 st.caption("*Note: Physical Inactivity is now positioned as a driver influenced by Crime and Transportation. All projections use a 0.4 damping factor.*")
+
 
