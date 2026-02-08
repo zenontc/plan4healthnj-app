@@ -202,7 +202,8 @@ for i, outcome in enumerate(outcomes):
         )
 
 st.markdown("---")
-st.caption("*Note: Physical Inactivity is now positioned as a driver influenced by Crime and Transportation. All projections use a 0.4 damping factor.*")
+st.caption("*Note: This simulator uses linear regression with a damping factor for conservative estimation. Driver interdependencies (e.g., Transportation impacting Food Insecurity) are included in the logic.*")
+
 
 
 
