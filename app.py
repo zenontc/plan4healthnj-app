@@ -135,4 +135,75 @@ final_deltas = adjustment_deltas.copy()
 # Transportation ripple effects
 final_deltas['Food insecurity crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.3
 final_deltas['Physical inactivity crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.3
-final_deltas['Social isolation crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude
+final_deltas['Social isolation crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.2
+
+# Income ripple effects
+income_delta_scaled = adjustment_deltas['Median HH Income'] / 10000 
+final_deltas['Housing insecurity crude prevalence (%)'] -= income_delta_scaled * 0.5
+final_deltas['Food insecurity crude prevalence (%)'] -= income_delta_scaled * 0.3
+
+# Crime ripple effect on Physical Inactivity
+crime_delta_scaled = adjustment_deltas['Crime Index'] / 10
+final_deltas['Physical inactivity crude prevalence (%)'] += crime_delta_scaled * 0.2
+
+# --- 7. Calculate Outcomes with Damping ---
+DAMPING_FACTOR = 0.4 
+predicted_values = {}
+
+for outcome in outcomes:
+    total_change = 0
+    for driver in drivers:
+        # We look up the coefficient. Because we redefined drivers/outcomes properly, 
+        # this will no longer throw a KeyError.
+        coeff = coefficients[outcome][driver]
+        total_change += final_deltas[driver] * coeff
+    
+    total_change *= DAMPING_FACTOR
+    predicted_values[outcome] = max(0, baseline_data[outcome] + total_change)
+
+# --- 8. Visualizations ---
+results = []
+for outcome in outcomes:
+    results.append({
+        "Measure": get_clean_label(outcome).replace(" (%)", ""),
+        "Baseline": baseline_data[outcome],
+        "Simulated": predicted_values[outcome]
+    })
+    
+results_df = pd.DataFrame(results)
+
+fig = go.Figure()
+fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Baseline"], name='Baseline', marker_color='lightslategray'))
+fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Simulated"], name='Simulated', marker_color='royalblue'))
+
+fig.update_layout(
+    title=f"Projected Health Outcomes: {selected_muni}",
+    yaxis_title="Prevalence (%)",
+    barmode='group',
+    height=500,
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# --- 9. Metrics Table ---
+st.subheader("Detailed Projections")
+cols = st.columns(len(outcomes))
+
+for i, outcome in enumerate(outcomes):
+    base = baseline_data[outcome]
+    pred = predicted_values[outcome]
+    diff = pred - base
+    
+    delta_val = f"{diff:.1f}%" if abs(diff) > 0.01 else None
+    
+    with cols[i]:
+        st.metric(
+            label=get_clean_label(outcome),
+            value=f"{pred:.1f}%",
+            delta=delta_val,
+            delta_color="inverse"
+        )
+
+st.markdown("---")
+st.caption("*Note: Model updated to move Physical Inactivity to a Driver. Linear regression coefficients are recalculated based on this new structure.*")
