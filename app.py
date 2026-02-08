@@ -177,4 +177,29 @@ fig.update_layout(
     yaxis_title="Prevalence (%)",
     barmode='group',
     height=500,
-    legend=dict(orientation="h", yanchor="
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# --- 9. Metrics Table ---
+st.subheader("Detailed Projections")
+cols = st.columns(len(outcomes))
+
+for i, outcome in enumerate(outcomes):
+    base = baseline_data[outcome]
+    pred = predicted_values[outcome]
+    diff = pred - base
+    
+    delta_val = f"{diff:.1f}%" if abs(diff) > 0.01 else None
+    
+    with cols[i]:
+        st.metric(
+            label=get_clean_label(outcome),
+            value=f"{pred:.1f}%",
+            delta=delta_val,
+            delta_color="inverse"
+        )
+
+st.markdown("---")
+st.caption("*Note: Physical Inactivity is now positioned as a driver influenced by Crime and Transportation. All projections use a 0.4 damping factor.*")
