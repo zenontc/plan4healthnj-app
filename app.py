@@ -64,9 +64,9 @@ coefficients = get_coefficients(df, drivers, outcomes)
 # --- 4. Streamlit UI Layout ---
 st.set_page_config(layout="wide", page_title="NJ Health & Planning Tool")
 
-st.title("NJ Municipal Planning and Public Health Tool")
+st.title("NJ Municipal Health & Planning Simulator")
 st.markdown("""
-This tool models how changes in factors that can be impacted through Planning 
+This tool simulates how changes in the **built environment** and **social factors** (drivers) 
 might impact **public health outcomes** in New Jersey municipalities.
 """)
 
@@ -86,7 +86,7 @@ def reset_sliders():
 st.sidebar.button("Reset Sliders to Baseline", on_click=reset_sliders)
 
 st.sidebar.header("2. Adjust Planning Factors")
-st.sidebar.markdown("Use sliders to see improvements or decline in outcomes.")
+st.sidebar.markdown("Use sliders to simulate improvements or decline.")
 
 slider_vals = {}
 for driver in drivers:
@@ -186,5 +186,3 @@ for i, outcome in enumerate(outcomes):
 
 st.markdown("---")
 st.caption("*Note: This model uses simple linear regression coefficients derived from NJ municipal data. It assumes additive effects and includes conservative damping factors for planning simulation purposes only.*")
-
-
