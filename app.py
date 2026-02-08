@@ -4,14 +4,14 @@ import pandas as pd
 # --- APP CONFIGURATION ---
 st.set_page_config(page_title="Health Planning Tool", layout="wide")
 
-## Header Section
+# Header Section
 st.title("🏥 Health Service Planning Factor Tool")
 st.markdown("""
 Reverted to **Actual Values** and **Crude Prevalence** (per 1,000 pop). 
 Use the sidebar to adjust your catchment population and disease frequency.
 """)
 
----
+st.divider()
 
 # --- SIDEBAR: PLANNING FACTORS ---
 st.sidebar.header("Step 1: Planning Factors")
@@ -34,11 +34,7 @@ crude_prevalence = st.sidebar.slider(
     help="The total number of existing cases for every 1,000 people in the population."
 )
 
----
-
 # --- CALCULATION LOGIC ---
-
-# Formula for Crude Prevalence calculation:
 # Planned Cases = (Crude Prevalence / 1,000) * Total Population
 planned_cases = int((crude_prevalence / 1000) * total_population)
 
@@ -54,27 +50,22 @@ with col2:
 with col3:
     st.metric(label="Estimated Total Cases", value=f"{planned_cases:,}")
 
----
+st.divider()
 
 # --- DATA BREAKDOWN ---
 st.subheader("📊 Planning Breakdown")
 
-# Breakdown of cases by demographic or severity (Example)
-# We apply actual values to these subgroups now
+# Breakdown of cases by demographic or severity
 data = {
     "Category": ["Mild / Routine", "Moderate / Urgent", "Severe / Hospitalization"],
-    "Factor of Total Cases": [0.70, 0.20, 0.10], # Proportions of the planned cases
+    "Factor of Total": [0.70, 0.20, 0.10], 
 }
 
 df = pd.DataFrame(data)
-df["Actual Expected Count"] = (df["Factor of Total Cases"] * planned_cases).astype(int)
+df["Actual Expected Count"] = (df["Factor of Total"] * planned_cases).astype(int)
 
 # Formatting for display
 st.table(df[["Category", "Actual Expected Count"]])
 
 st.info(f"**Note:** This model assumes a crude prevalence of {crude_prevalence} per 1,000. "
         f"For a population of {total_population:,}, your facility should prepare for {planned_cases:,} cases.")
-
-# --- NEXT STEPS ---
-# Would you like me to add a 'Staffing Ratio' section where we calculate how many nurses/doctors 
-# you need based on these actual case counts?
