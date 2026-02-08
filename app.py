@@ -76,9 +76,6 @@ muni_list = sorted(df['Municipality and County'].unique())
 selected_muni = st.sidebar.selectbox("Choose a Municipality:", muni_list)
 baseline_data = df[df['Municipality and County'] == selected_muni].iloc[0]
 
-st.sidebar.header("2. Adjust Planning Factors")
-st.sidebar.markdown("Use sliders to see improvements or decline in outcomes.")
-
 # --- RESET LOGIC ---
 if "reset_key" not in st.session_state:
     st.session_state.reset_key = 0
@@ -87,6 +84,9 @@ def reset_sliders():
     st.session_state.reset_key += 1
 
 st.sidebar.button("Reset Sliders to Baseline", on_click=reset_sliders)
+
+st.sidebar.header("2. Adjust Planning Factors")
+st.sidebar.markdown("Use sliders to see improvements or decline in outcomes.")
 
 slider_vals = {}
 for driver in drivers:
@@ -186,4 +186,5 @@ for i, outcome in enumerate(outcomes):
 
 st.markdown("---")
 st.caption("*Note: This model uses simple linear regression coefficients derived from NJ municipal data. It assumes additive effects and includes conservative damping factors for planning simulation purposes only.*")
+
 
