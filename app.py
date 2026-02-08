@@ -3,21 +3,16 @@ import pandas as pd
 import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
 
-# --- 1. Load and Prep Data ---
+# --- 1. Load Data ---
 @st.cache_data
 def load_data():
     df = pd.read_csv('NJ_Municipal_Health_Data.csv')
     df.columns = df.columns.str.strip()
     return df
 
-try:
-    df = load_data()
-except Exception as e:
-    st.error(f"Error loading CSV: {e}")
-    st.stop()
+df = load_data()
 
-# --- 2. Define Drivers (Inputs) and Outcomes (Outputs) ---
-# Ordered as requested
+# --- 2. Define Drivers and Outcomes (Specific Order) ---
 drivers = [
     'Median HH Income',
     'Crime Index',
@@ -32,16 +27,24 @@ outcomes = [
     'Physical inactivity crude prevalence (%)',
     'Obesity crude prevalence (%)',
     'Diabetes crude prevalence (%)',
-    'Frequnt physical distress crude prevalence (%)', 
+    'Frequnt physical distress crude prevalence (%)', # Typo from CSV
     'Depression crude prevalence (%)',
     'Frequent mental distress crude prevalence (%)',
-    'Fair or poor health crude prevalence (%)' # Will rename to "Poor Health" in UI
+    'Fair or poor health crude prevalence (%)'
 ]
 
-# --- 3. Calculate Statistical Relationships ---
-# We use a damping factor (0.4) to make the model more conservative
-SENSITIVITY_DAMPING = 0.4 
+# --- 3. Helper Functions ---
+def get_clean_label(col):
+    mapping = {
+        'Fair or poor health crude prevalence (%)': 'Poor Health (%)',
+        'Frequnt physical distress crude prevalence (%)': 'Physical Distress (%)',
+        'Median HH Income': 'Median HH Income ($)'
+    }
+    if col in mapping:
+        return mapping[col]
+    return col.replace(" crude prevalence (%)", " (%)")
 
+# --- 4. Regression & Interdependency Logic ---
 @st.cache_resource
 def get_coefficients(_df, _drivers, _outcomes):
     coeffs = {}
@@ -49,21 +52,16 @@ def get_coefficients(_df, _drivers, _outcomes):
         coeffs[outcome] = {}
         for driver in _drivers:
             temp_df = _df[[driver, outcome]].dropna()
-            if not temp_df.empty:
-                X = temp_df[[driver]]
-                y = temp_df[outcome]
-                model = LinearRegression().fit(X, y)
-                # Apply damping to keep results conservative
-                coeffs[outcome][driver] = model.coef_[0] * SENSITIVITY_DAMPING
-            else:
-                coeffs[outcome][driver] = 0
+            X = temp_df[[driver]]
+            y = temp_df[outcome]
+            model = LinearRegression().fit(X, y)
+            coeffs[outcome][driver] = model.coef_[0]
     return coeffs
 
 coefficients = get_coefficients(df, drivers, outcomes)
 
-# --- 4. Streamlit UI Layout ---
+# --- 5. UI Layout ---
 st.set_page_config(layout="wide", page_title="NJ Health & Planning Tool")
-
 st.title("NJ Municipal Health & Planning Simulator")
 st.markdown("""
 This tool simulates how changes in the **built environment** and **social factors** (drivers) 
@@ -73,76 +71,88 @@ might impact **public health outcomes** in New Jersey municipalities.
 # Sidebar: Select Municipality
 st.sidebar.header("1. Select Municipality")
 muni_list = sorted(df['Municipality and County'].unique())
+
+# Reset logic for municipality change
+if 'last_muni' not in st.session_state:
+    st.session_state.last_muni = muni_list[0]
+
 selected_muni = st.sidebar.selectbox("Choose a Municipality:", muni_list)
+
+# If municipality changes, reset all sliders in session state
+if selected_muni != st.session_state.last_muni:
+    for d in drivers:
+        if f"slider_{d}" in st.session_state:
+            del st.session_state[f"slider_{d}"]
+    st.session_state.last_muni = selected_muni
+
 baseline_data = df[df['Municipality and County'] == selected_muni].iloc[0]
 
-# --- RESET LOGIC ---
-if "reset_key" not in st.session_state:
-    st.session_state.reset_key = 0
-
-def reset_sliders():
-    st.session_state.reset_key += 1
-
-st.sidebar.button("Reset Sliders to Baseline", on_click=reset_sliders)
-
+# Sidebar: Drivers
 st.sidebar.header("2. Adjust Planning Factors")
 st.sidebar.markdown("Use sliders to simulate improvements or decline.")
 
-slider_vals = {}
+# Reset Button
+if st.sidebar.button("Reset to Baseline"):
+    for d in drivers:
+        st.session_state[f"slider_{d}"] = float(baseline_data[d])
+
+adjustment_deltas = {}
+
 for driver in drivers:
     current_val = float(baseline_data[driver])
     
-    # Range logic
+    # Dynamic range logic
     if "Income" in driver:
-        min_v, max_v, step = 0.0, float(df[driver].max()), 1000.0
-        fmt = "$%.0f"
+        min_v, max_v, step = 0.0, float(df[driver].max() * 1.2), 1000.0
     else:
         min_v, max_v, step = 0.0, max(float(df[driver].max()), current_val * 2), 0.1
-        fmt = "%.1f%%"
 
-    # Unique key with reset trigger
-    slider_vals[driver] = st.sidebar.slider(
-        f"{driver}",
+    # Initialize slider in session state if not there
+    if f"slider_{driver}" not in st.session_state:
+        st.session_state[f"slider_{driver}"] = current_val
+
+    val = st.sidebar.slider(
+        get_clean_label(driver),
         min_value=min_v,
         max_value=max_v,
-        value=current_val,
+        key=f"slider_{driver}",
         step=step,
-        format=fmt,
-        key=f"{driver}_{st.session_state.reset_key}"
+        format="$%.0f" if "Income" in driver else "%.1f%%"
     )
+    adjustment_deltas[driver] = val - current_val
 
-# --- 5. INTER-SLIDER DEPENDENCY LOGIC ---
-# Changes in one factor influence others before calculating health outcomes
-adj_deltas = {d: slider_vals[d] - baseline_data[d] for d in drivers}
+# --- 6. Inter-Driver Logic (Sliders affecting one another) ---
+# For instance, if Transportation barriers drop, Food Insecurity and Social Isolation also drop.
+# We modify the deltas used for the final outcome calculation.
+final_deltas = adjustment_deltas.copy()
 
-# Example Dependencies:
-# 1. Transportation improvement reduces Food Insecurity delta
-adj_deltas['Food insecurity crude prevalence (%)'] += (adj_deltas['Transportation barriers crude prevalence (%)'] * 0.2)
-# 2. Income increase reduces Housing and Food insecurity deltas
-if "Median HH Income" in adj_deltas:
-    income_effect = adj_deltas['Median HH Income'] / 10000  # Per 10k change
-    adj_deltas['Housing insecurity crude prevalence (%)'] -= (income_effect * 0.5)
-    adj_deltas['Food insecurity crude prevalence (%)'] -= (income_effect * 0.3)
+# Logic: Transportation impacts Food Insecurity (30% weight) and Social Isolation (20% weight)
+final_deltas['Food insecurity crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.3
+final_deltas['Social isolation crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.2
+# Logic: Income impacts Housing and Food Insecurity (scaled appropriately)
+income_delta_scaled = adjustment_deltas['Median HH Income'] / 10000 
+final_deltas['Housing insecurity crude prevalence (%)'] -= income_delta_scaled * 0.5
+final_deltas['Food insecurity crude prevalence (%)'] -= income_delta_scaled * 0.3
 
-# --- 6. Calculate Predicted Outcomes ---
+# --- 7. Calculate Outcomes with Damping ---
+DAMPING_FACTOR = 0.4  # Makes the model more conservative
 predicted_values = {}
+
 for outcome in outcomes:
-    total_change = sum(adj_deltas[d] * coefficients[outcome][d] for d in drivers)
-    predicted_val = max(0, baseline_data[outcome] + total_change)
-    predicted_values[outcome] = predicted_val
+    total_change = 0
+    for driver in drivers:
+        coeff = coefficients[outcome][driver]
+        total_change += final_deltas[driver] * coeff
+    
+    # Apply damping and ensure no negative prevalence
+    total_change *= DAMPING_FACTOR
+    predicted_values[outcome] = max(0, baseline_data[outcome] + total_change)
 
-# --- 7. Visualization ---
-# Rename "Fair or poor health" to "Poor Health" for results
-def clean_label(text):
-    text = text.replace(" crude prevalence (%)", "")
-    if "Fair or poor health" in text:
-        return "Poor Health"
-    return text
-
+# --- 8. Visualizations ---
 results = []
 for outcome in outcomes:
     results.append({
-        "Measure": clean_label(outcome),
+        "Measure": get_clean_label(outcome).replace(" (%)", ""),
         "Baseline": baseline_data[outcome],
         "Simulated": predicted_values[outcome]
     })
@@ -150,39 +160,38 @@ for outcome in outcomes:
 results_df = pd.DataFrame(results)
 
 fig = go.Figure()
-fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Baseline"], name='Current Baseline', marker_color='lightslategray'))
-fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Simulated"], name='Simulated Scenario', marker_color='royalblue'))
+fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Baseline"], name='Baseline', marker_color='lightslategray'))
+fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Simulated"], name='Simulated', marker_color='royalblue'))
 
 fig.update_layout(
-    title=f"Projected Health Outcomes for {selected_muni}",
+    title=f"Projected Health Outcomes: {selected_muni}",
     yaxis_title="Prevalence (%)",
     barmode='group',
     height=500,
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
+
 st.plotly_chart(fig, use_container_width=True)
 
-# --- 8. Detailed Metrics Table ---
+# --- 9. Metrics Table ---
 st.subheader("Detailed Projections")
 cols = st.columns(len(outcomes))
 
 for i, outcome in enumerate(outcomes):
-    baseline = baseline_data[outcome]
-    predicted = predicted_values[outcome]
-    change = predicted - baseline
+    base = baseline_data[outcome]
+    pred = predicted_values[outcome]
+    diff = pred - base
     
-    # Delta Formatting: Gray and no arrow if change is 0
-    d_color = "inverse"
-    if round(change, 1) == 0.0:
-        d_color = "off"
+    # Formatting for 0.0% delta
+    delta_val = f"{diff:.1f}%" if abs(diff) > 0.01 else None
     
     with cols[i]:
         st.metric(
-            label=clean_label(outcome),
-            value=f"{predicted:.1f}%",
-            delta=f"{change:.1f}%" if d_color != "off" else "0.0%",
-            delta_color=d_color
+            label=get_clean_label(outcome),
+            value=f"{pred:.1f}%",
+            delta=delta_val,
+            delta_color="inverse"
         )
 
 st.markdown("---")
-st.caption("*Note: This model uses simple linear regression coefficients derived from NJ municipal data. It assumes additive effects and includes conservative damping factors for planning simulation purposes only.*")
+st.caption("*Note: This simulator uses linear regression with a damping factor for conservative estimation. Driver interdependencies (e.g., Transportation impacting Food Insecurity) are included in the logic.*")
