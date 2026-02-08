@@ -6,17 +6,22 @@ from sklearn.linear_model import LinearRegression
 # --- 1. Load and Prep Data ---
 @st.cache_data
 def load_data():
-    # Load the pre-calculated municipal data
-    df = pd.read_csv('NJ_Municipal_Health_Data.csv')
-    return df
+    try:
+        df = pd.read_csv('NJ_Municipal_Health_Data.csv')
+        # Clean column names just in case there are leading/trailing spaces
+        df.columns = df.columns.str.strip()
+        return df
+    except FileNotFoundError:
+        return None
 
-try:
-    df = load_data()
-except FileNotFoundError:
-    st.error("File 'NJ_Municipal_Health_Data.csv' not found. Please ensure it is in the same directory.")
+df = load_data()
+
+if df is None:
+    st.error("🚨 **File Not Found:** Please make sure 'NJ_Municipal_Health_Data.csv' is in the same folder as this script.")
     st.stop()
 
 # --- 2. Define Drivers and Outcomes ---
+# I have kept the names exactly as you provided.
 drivers = [
     'Median HH Income',
     'Crime Index',
@@ -37,38 +42,42 @@ outcomes = [
     'Fair or poor health crude prevalence (%)'
 ]
 
-# Mapping for cleaner labels using "Crude Prevalence"
+# --- 3. DIAGNOSTIC CHECK ---
+# This ensures the app doesn't crash if names don't match exactly
+missing_cols = [c for c in drivers + outcomes if c not in df.columns]
+if missing_cols:
+    st.error("🚨 **Column Name Mismatch!**")
+    st.write("The following names in the code do not exist in your CSV:")
+    st.write(missing_cols)
+    st.write("Current CSV Columns:", list(df.columns))
+    st.stop()
+
+# --- 4. Mapping for UI Labels ---
 labels = {
-    'Median HH Income': 'Median Household Income ($)',
-    'Crime Index': 'Crime Index (AGS)',
-    'Transportation barriers crude prevalence (%)': 'Transportation Barriers (Crude Prevalence)',
-    'Food insecurity crude prevalence (%)': 'Food Insecurity (Crude Prevalence)',
-    'Housing insecurity crude prevalence (%)': 'Housing Insecurity (Crude Prevalence)',
-    'Utilities services threat crude prevalence (%)': 'Utility Service Threats (Crude Prevalence)',
-    'Social isolation crude prevalence (%)': 'Social Isolation (Crude Prevalence)',
-    'Frequnt physical distress crude prevalence (%)': 'Frequent Physical Distress (Crude Prevalence)',
-    'Depression crude prevalence (%)': 'Depression (Crude Prevalence)'
+    'Median HH Income': 'Median HH Income ($)',
+    'Crime Index': 'Crime Index',
+    'Transportation barriers crude prevalence (%)': 'Transportation Barriers',
+    'Food insecurity crude prevalence (%)': 'Food Insecurity',
+    'Housing insecurity crude prevalence (%)': 'Housing Insecurity',
+    'Utilities services threat crude prevalence (%)': 'Utility Service Threats',
+    'Social isolation crude prevalence (%)': 'Social Isolation',
+    'Frequnt physical distress crude prevalence (%)': 'Frequent Physical Distress',
+    'Depression crude prevalence (%)': 'Depression'
 }
 
 def get_label(col):
-    # Standardize to "Crude Prevalence" for display
-    return labels.get(col, col.replace(" crude prevalence (%)", " (Crude Prevalence)"))
+    return labels.get(col, col.replace(" crude prevalence (%)", ""))
 
-# --- 3. Statistical Relationships ---
-coefficients = {}
-for outcome in outcomes:
-    coefficients[outcome] = {}
-    for driver in drivers:
-        X = df[[driver]].fillna(df[driver].mean())
-        y = df[outcome].fillna(df[outcome].mean())
-        model = LinearRegression().fit(X, y)
-        coefficients[outcome][driver] = model.coef_[0]
-
-# --- 4. Streamlit UI Layout ---
-st.set_page_config(layout="wide", page_title="NJ Health Simulator")
-
-st.title("NJ Municipal Health & Planning Simulator")
-st.markdown("""
-**Instructions:** Select a municipality. The sliders are set to the **Actual Baseline Values** for that location. 
-* Slide **Left** to simulate a decrease in that factor.
-* Slide **Right** to simulate an increase.
+# --- 5. Calculate Statistical Relationships ---
+@st.cache_resource
+def get_coefficients(_df, drivers, outcomes):
+    coeffs = {}
+    for outcome in outcomes:
+        coeffs[outcome] = {}
+        for driver in drivers:
+            # Drop NaNs for the regression calculation
+            temp_df = _df[[driver, outcome]].dropna()
+            if len(temp_df) > 1:
+                X = temp_df[[driver]]
+                y = temp_df[outcome]
+                model = LinearRegression().fit(X
