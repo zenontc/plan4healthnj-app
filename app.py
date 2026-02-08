@@ -12,24 +12,23 @@ def load_data():
 
 df = load_data()
 
-# --- 2. Define Drivers and Outcomes (Updated) ---
-# Physical Inactivity is now strictly a DRIVER
+# --- 2. Define Drivers and Outcomes (Specific Order) ---
+# Physical Inactivity moved to follow Crime Index
 drivers = [
     'Median HH Income',
     'Crime Index',
+    'Physical inactivity crude prevalence (%)', 
     'Transportation barriers crude prevalence (%)',
     'Food insecurity crude prevalence (%)',
     'Housing insecurity crude prevalence (%)',
     'Utilities services threat crude prevalence (%)',
-    'Social isolation crude prevalence (%)',
-    'Physical inactivity crude prevalence (%)' 
+    'Social isolation crude prevalence (%)'
 ]
 
-# Physical Inactivity has been removed from OUTCOMES
 outcomes = [
     'Obesity crude prevalence (%)',
     'Diabetes crude prevalence (%)',
-    'Frequnt physical distress crude prevalence (%)', 
+    'Frequnt physical distress crude prevalence (%)', # Typo from CSV
     'Depression crude prevalence (%)',
     'Frequent mental distress crude prevalence (%)',
     'Fair or poor health crude prevalence (%)'
@@ -55,7 +54,6 @@ def get_coefficients(_df, _drivers, _outcomes):
     for outcome in _outcomes:
         coeffs[outcome] = {}
         for driver in _drivers:
-            # Ensure we only regress if columns exist and aren't empty
             temp_df = _df[[driver, outcome]].dropna()
             if not temp_df.empty:
                 X = temp_df[[driver]]
@@ -84,7 +82,7 @@ if 'last_muni' not in st.session_state:
 
 selected_muni = st.sidebar.selectbox("Choose a Municipality:", muni_list)
 
-# Municipality Change Reset
+# Reset sliders on municipality change
 if selected_muni != st.session_state.last_muni:
     for d in drivers:
         if f"slider_{d}" in st.session_state:
@@ -153,8 +151,6 @@ predicted_values = {}
 for outcome in outcomes:
     total_change = 0
     for driver in drivers:
-        # We look up the coefficient. Because we redefined drivers/outcomes properly, 
-        # this will no longer throw a KeyError.
         coeff = coefficients[outcome][driver]
         total_change += final_deltas[driver] * coeff
     
@@ -181,29 +177,4 @@ fig.update_layout(
     yaxis_title="Prevalence (%)",
     barmode='group',
     height=500,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
-# --- 9. Metrics Table ---
-st.subheader("Detailed Projections")
-cols = st.columns(len(outcomes))
-
-for i, outcome in enumerate(outcomes):
-    base = baseline_data[outcome]
-    pred = predicted_values[outcome]
-    diff = pred - base
-    
-    delta_val = f"{diff:.1f}%" if abs(diff) > 0.01 else None
-    
-    with cols[i]:
-        st.metric(
-            label=get_clean_label(outcome),
-            value=f"{pred:.1f}%",
-            delta=delta_val,
-            delta_color="inverse"
-        )
-
-st.markdown("---")
-st.caption("*Note: Model updated to move Physical Inactivity to a Driver. Linear regression coefficients are recalculated based on this new structure.*")
+    legend=dict(orientation="h", yanchor="
