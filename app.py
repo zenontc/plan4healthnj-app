@@ -12,8 +12,8 @@ def load_data():
 
 df = load_data()
 
-# --- 2. Define Drivers and Outcomes (Specific Order) ---
-# Physical Inactivity is now a Driver
+# --- 2. Define Drivers and Outcomes (Updated) ---
+# Physical Inactivity is now strictly a DRIVER
 drivers = [
     'Median HH Income',
     'Crime Index',
@@ -25,10 +25,11 @@ drivers = [
     'Physical inactivity crude prevalence (%)' 
 ]
 
+# Physical Inactivity has been removed from OUTCOMES
 outcomes = [
     'Obesity crude prevalence (%)',
     'Diabetes crude prevalence (%)',
-    'Frequnt physical distress crude prevalence (%)', # Typo from CSV
+    'Frequnt physical distress crude prevalence (%)', 
     'Depression crude prevalence (%)',
     'Frequent mental distress crude prevalence (%)',
     'Fair or poor health crude prevalence (%)'
@@ -47,18 +48,22 @@ def get_clean_label(col):
         return mapping[col]
     return col.replace(" crude prevalence (%)", " (%)")
 
-# --- 4. Regression & Interdependency Logic ---
+# --- 4. Regression Engine ---
 @st.cache_resource
 def get_coefficients(_df, _drivers, _outcomes):
     coeffs = {}
     for outcome in _outcomes:
         coeffs[outcome] = {}
         for driver in _drivers:
+            # Ensure we only regress if columns exist and aren't empty
             temp_df = _df[[driver, outcome]].dropna()
-            X = temp_df[[driver]]
-            y = temp_df[outcome]
-            model = LinearRegression().fit(X, y)
-            coeffs[outcome][driver] = model.coef_[0]
+            if not temp_df.empty:
+                X = temp_df[[driver]]
+                y = temp_df[outcome]
+                model = LinearRegression().fit(X, y)
+                coeffs[outcome][driver] = model.coef_[0]
+            else:
+                coeffs[outcome][driver] = 0.0
     return coeffs
 
 coefficients = get_coefficients(df, drivers, outcomes)
@@ -79,6 +84,7 @@ if 'last_muni' not in st.session_state:
 
 selected_muni = st.sidebar.selectbox("Choose a Municipality:", muni_list)
 
+# Municipality Change Reset
 if selected_muni != st.session_state.last_muni:
     for d in drivers:
         if f"slider_{d}" in st.session_state:
@@ -126,77 +132,7 @@ for driver in drivers:
 # --- 6. Inter-Driver Logic (Ripple Effects) ---
 final_deltas = adjustment_deltas.copy()
 
-# Transportation impacts Food Insecurity and Physical Inactivity (Active Transport)
+# Transportation ripple effects
 final_deltas['Food insecurity crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.3
 final_deltas['Physical inactivity crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.3
-final_deltas['Social isolation crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.2
-
-# Income impacts Housing and Food
-income_delta_scaled = adjustment_deltas['Median HH Income'] / 10000 
-final_deltas['Housing insecurity crude prevalence (%)'] -= income_delta_scaled * 0.5
-final_deltas['Food insecurity crude prevalence (%)'] -= income_delta_scaled * 0.3
-
-# Crime impacts Physical Inactivity (Safety to exercise outdoors)
-crime_delta_scaled = adjustment_deltas['Crime Index'] / 10 # Scale based on typical range
-final_deltas['Physical inactivity crude prevalence (%)'] += crime_delta_scaled * 0.2
-
-# --- 7. Calculate Outcomes with Damping ---
-DAMPING_FACTOR = 0.4 
-predicted_values = {}
-
-for outcome in outcomes:
-    total_change = 0
-    for driver in drivers:
-        coeff = coefficients[outcome][driver]
-        total_change += final_deltas[driver] * coeff
-    
-    total_change *= DAMPING_FACTOR
-    predicted_values[outcome] = max(0, baseline_data[outcome] + total_change)
-
-# --- 8. Visualizations ---
-results = []
-for outcome in outcomes:
-    results.append({
-        "Measure": get_clean_label(outcome).replace(" (%)", ""),
-        "Baseline": baseline_data[outcome],
-        "Simulated": predicted_values[outcome]
-    })
-    
-results_df = pd.DataFrame(results)
-
-fig = go.Figure()
-fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Baseline"], name='Baseline', marker_color='lightslategray'))
-fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Simulated"], name='Simulated', marker_color='royalblue'))
-
-fig.update_layout(
-    title=f"Projected Health Outcomes: {selected_muni}",
-    yaxis_title="Prevalence (%)",
-    barmode='group',
-    height=500,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
-# --- 9. Metrics Table ---
-st.subheader("Detailed Projections")
-cols = st.columns(len(outcomes))
-
-for i, outcome in enumerate(outcomes):
-    base = baseline_data[outcome]
-    pred = predicted_values[outcome]
-    diff = pred - base
-    
-    # Show delta only if it's significant (>0.01)
-    delta_val = f"{diff:.1f}%" if abs(diff) > 0.01 else None
-    
-    with cols[i]:
-        st.metric(
-            label=get_clean_label(outcome),
-            value=f"{pred:.1f}%",
-            delta=delta_val,
-            delta_color="inverse"
-        )
-
-st.markdown("---")
-st.caption("*Note: Physical Inactivity has been moved to a Planning Factor to simulate active design impacts. Driver interdependencies are included (e.g., Crime and Transport barriers affecting Physical Inactivity).*")
+final_deltas['Social isolation crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude
