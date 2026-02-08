@@ -38,7 +38,8 @@ def get_clean_label(col):
     mapping = {
         'Fair or poor health crude prevalence (%)': 'Poor Health (%)',
         'Frequnt physical distress crude prevalence (%)': 'Physical Distress (%)',
-        'Median HH Income': 'Median HH Income ($)'
+        'Median HH Income': 'Median HH Income ($)',
+        'Crime Index': 'Crime Index'  # Removed (%) from the label mapping
     }
     if col in mapping:
         return mapping[col]
@@ -87,7 +88,7 @@ if selected_muni != st.session_state.last_muni:
 baseline_data = df[df['Municipality and County'] == selected_muni].iloc[0]
 
 # Sidebar: Drivers
-st.sidebar.header("2. Adjust Planning Factors")
+st.sidebar.header("2. Adjust Factors")
 st.sidebar.markdown("Use sliders to show changes.")
 
 # Reset Button
@@ -103,8 +104,13 @@ for driver in drivers:
     # Dynamic range logic
     if "Income" in driver:
         min_v, max_v, step = 0.0, float(df[driver].max() * 1.2), 1000.0
+        fmt = "$%.0f"
+    elif "Crime Index" in driver:
+        min_v, max_v, step = 0.0, max(float(df[driver].max()), current_val * 2), 0.1
+        fmt = "%.1f"  # Removed the %% here
     else:
         min_v, max_v, step = 0.0, max(float(df[driver].max()), current_val * 2), 0.1
+        fmt = "%.1f%%"
 
     # Initialize slider in session state if not there
     if f"slider_{driver}" not in st.session_state:
@@ -116,25 +122,23 @@ for driver in drivers:
         max_value=max_v,
         key=f"slider_{driver}",
         step=step,
-        format="$%.0f" if "Income" in driver else "%.1f%%"
+        format=fmt
     )
     adjustment_deltas[driver] = val - current_val
 
-# --- 6. Inter-Driver Logic (Sliders affecting one another) ---
-# For instance, if Transportation barriers drop, Food Insecurity and Social Isolation also drop.
-# We modify the deltas used for the final outcome calculation.
+# --- 6. Inter-Driver Logic ---
 final_deltas = adjustment_deltas.copy()
 
 # Logic: Transportation impacts Food Insecurity (30% weight) and Social Isolation (20% weight)
 final_deltas['Food insecurity crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.3
 final_deltas['Social isolation crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.2
-# Logic: Income impacts Housing and Food Insecurity (scaled appropriately)
+# Logic: Income impacts Housing and Food Insecurity
 income_delta_scaled = adjustment_deltas['Median HH Income'] / 10000 
 final_deltas['Housing insecurity crude prevalence (%)'] -= income_delta_scaled * 0.5
 final_deltas['Food insecurity crude prevalence (%)'] -= income_delta_scaled * 0.3
 
 # --- 7. Calculate Outcomes with Damping ---
-DAMPING_FACTOR = 0.4  # Makes the model more conservative
+DAMPING_FACTOR = 0.4 
 predicted_values = {}
 
 for outcome in outcomes:
@@ -143,7 +147,6 @@ for outcome in outcomes:
         coeff = coefficients[outcome][driver]
         total_change += final_deltas[driver] * coeff
     
-    # Apply damping and ensure no negative prevalence
     total_change *= DAMPING_FACTOR
     predicted_values[outcome] = max(0, baseline_data[outcome] + total_change)
 
@@ -181,7 +184,6 @@ for i, outcome in enumerate(outcomes):
     pred = predicted_values[outcome]
     diff = pred - base
     
-    # Formatting for 0.0% delta
     delta_val = f"{diff:.1f}%" if abs(diff) > 0.01 else None
     
     with cols[i]:
@@ -194,4 +196,3 @@ for i, outcome in enumerate(outcomes):
 
 st.markdown("---")
 st.caption("*Note: This simulator uses linear regression with a damping factor for conservative estimation. Driver interdependencies (e.g., Transportation impacting Food Insecurity) are included in the logic.*")
-
