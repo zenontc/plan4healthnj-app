@@ -145,4 +145,30 @@ for outcome in core_outcomes:
 
 # --- 8. Poor Health Composite Logic ---
 # Poor health is the weighted average of core outcomes to ensure it doesn't zero out prematurely
-avg_outcome_change = sum(predicted_values[o] for o in core_outcomes) /
+avg_outcome_change = sum(predicted_values[o] for o in core_outcomes) / sum(baseline_data[o] for o in core_outcomes)
+predicted_values['Fair or poor health crude prevalence (%)'] = baseline_data['Fair or poor health crude prevalence (%)'] * avg_outcome_change
+
+# --- 9. Visualizations & Metrics ---
+results_df = pd.DataFrame([{
+    "Measure": get_clean_label(o).replace(" (%)", ""),
+    "Baseline": baseline_data[o],
+    "Simulated": predicted_values[o]
+} for o in outcomes])
+
+fig = go.Figure()
+fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Baseline"], name='Baseline', marker_color='lightslategray'))
+fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Simulated"], name='Simulated', marker_color='royalblue'))
+fig.update_layout(title=f"Projected Health Outcomes: {selected_muni}", yaxis_title="Prevalence (%)", barmode='group', height=500)
+st.plotly_chart(fig, use_container_width=True)
+
+st.subheader("Detailed Projections")
+cols = st.columns(len(outcomes))
+for i, outcome in enumerate(outcomes):
+    base, pred = baseline_data[outcome], predicted_values[outcome]
+    diff = pred - base
+    delta_val = f"{diff:.1f}%" if abs(diff) > 0.05 else None
+    with cols[i]:
+        st.metric(label=get_clean_label(outcome), value=f"{pred:.1f}%", delta=delta_val, delta_color="inverse")
+
+st.markdown("---")
+st.caption("*Note: This model uses proportional scaling and interdependency logic. Outcomes are tied to the aggregate state of all planning factors to ensure conservative and realistic simulations.*")
