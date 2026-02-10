@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
-import numpy as np
 
 # --- 1. Load Data ---
 @st.cache_data
@@ -92,7 +91,7 @@ baseline_data = df[df['Municipality and County'] == selected_muni].iloc[0]
 
 # Sidebar: Drivers
 st.sidebar.header("2. Adjust Factors")
-st.sidebar.markdown("Use sliders to show changes. Physical Inactivity to Social Isolation factors represent the percentage of the population affected.")
+st.sidebar.markdown("Use sliders to show changes. Physical Inactivity to Social Isolation factors are the percentage of the population over 18 affected by the issue.")
 
 if st.sidebar.button("Reset to Baseline"):
     for d in drivers:
@@ -102,20 +101,20 @@ current_slider_values = {}
 adjustment_deltas = {}
 
 for driver in drivers:
-    current_val = float(baseline_data[driver])
+    baseline_val = float(baseline_data[driver])
     
     if "Income" in driver:
-        min_v, max_v, step = 0.0, float(df[driver].max() * 1.5), 1000.0
+        min_v, max_v, step = 0.0, float(df[driver].max() * 1.2), 1000.0
         fmt = "$%.0f"
     elif "Crime Index" in driver:
-        min_v, max_v, step = 0.0, max(float(df[driver].max()), current_val * 2), 0.1
+        min_v, max_v, step = 0.0, max(float(df[driver].max()), baseline_val * 2), 0.1
         fmt = "%.1f"
     else:
-        min_v, max_v, step = 0.0, max(float(df[driver].max()), current_val * 2), 0.1
+        min_v, max_v, step = 0.0, max(float(df[driver].max()), baseline_val * 2), 0.1
         fmt = "%.1f%%"
 
     if f"slider_{driver}" not in st.session_state:
-        st.session_state[f"slider_{driver}"] = current_val
+        st.session_state[f"slider_{driver}"] = baseline_val
 
     val = st.sidebar.slider(
         get_clean_label(driver),
@@ -126,64 +125,60 @@ for driver in drivers:
         format=fmt
     )
     current_slider_values[driver] = val
-    adjustment_deltas[driver] = val - current_val
+    adjustment_deltas[driver] = val - baseline_val
 
-# --- 6. Inter-Driver & Interrelated Logic ---
+# --- 6. Inter-Driver Logic (Ripple Effects) ---
 final_deltas = adjustment_deltas.copy()
 
-# Ripple Effects
-final_deltas['Food insecurity crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.2
-final_deltas['Physical inactivity crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.2
-final_deltas['Social isolation crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.1
+# Transportation impacts
+final_deltas['Food insecurity crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.3
+final_deltas['Physical inactivity crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.3
+final_deltas['Social isolation crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.2
 
+# Income impacts
 income_delta_scaled = adjustment_deltas['Median HH Income'] / 10000 
-final_deltas['Housing insecurity crude prevalence (%)'] -= income_delta_scaled * 0.3
-final_deltas['Food insecurity crude prevalence (%)'] -= income_delta_scaled * 0.2
+final_deltas['Housing insecurity crude prevalence (%)'] -= income_delta_scaled * 0.5
+final_deltas['Food insecurity crude prevalence (%)'] -= income_delta_scaled * 0.3
 
+# Crime impacts
 crime_delta_scaled = adjustment_deltas['Crime Index'] / 10
-final_deltas['Physical inactivity crude prevalence (%)'] += crime_delta_scaled * 0.15
+final_deltas['Physical inactivity crude prevalence (%)'] += crime_delta_scaled * 0.2
 
-# --- 7. Calculate Outcomes with Damping and Floor Logic ---
-DAMPING_FACTOR = 0.3 # More conservative
+# --- 7. Calculate Outcomes with Enhanced Logic ---
+DAMPING_FACTOR = 0.25 # More conservative base
 predicted_values = {}
 
-# Calculate disease-specific outcomes first
-disease_outcomes = [o for o in outcomes if "Fair or poor health" not in o]
+# Check if all social/environmental factors are zero (ignoring income)
+all_zero_except_income = all(current_slider_values[d] == 0 for d in drivers if d != 'Median HH Income')
 
-for outcome in disease_outcomes:
+for outcome in outcomes:
     total_change = 0
     for driver in drivers:
         coeff = coefficients[outcome][driver]
         
-        # Boosted Relationships
-        if "Physical inactivity" in driver and ("Obesity" in outcome or "Diabetes" in outcome):
-            coeff *= 1.5 
-        if "Social isolation" in driver and "Depression" in outcome:
-            coeff *= 1.8
+        # Boost specific relationships
+        weight = 1.0
+        if driver == 'Physical inactivity crude prevalence (%)' and outcome in ['Obesity crude prevalence (%)', 'Diabetes crude prevalence (%)']:
+            weight = 1.8
+        if driver == 'Social isolation crude prevalence (%)' and outcome == 'Depression crude prevalence (%)':
+            weight = 1.8
             
-        total_change += final_deltas[driver] * coeff
+        total_change += (final_deltas[driver] * coeff * weight)
     
-    raw_pred = baseline_data[outcome] + (total_change * DAMPING_FACTOR)
-    
-    # Floor Logic: Calculate if all factors (excluding income) are zero
-    social_factors_sum = sum(current_slider_values[d] for d in drivers if "Income" not in d)
-    
-    if social_factors_sum <= 0.1:
-        # If social factors are zeroed, health follows income scaling
-        income_ratio = current_slider_values['Median HH Income'] / max(df['Median HH Income'])
-        predicted_values[outcome] = raw_pred * (1 - income_ratio)
+    # Poor Health is a composite; it moves slower than individual diseases
+    if outcome == 'Fair or poor health crude prevalence (%)':
+        effective_damping = DAMPING_FACTOR * 0.6
     else:
-        # Ensure health doesn't drop below 10% of baseline unless factors are zeroed
-        predicted_values[outcome] = max(baseline_data[outcome] * 0.1, raw_pred)
+        effective_damping = DAMPING_FACTOR
 
-# Composite Calculation for Poor Health
-# It is 40% its own regression and 60% the average of other outcomes to prevent premature zeroing
-poor_health_col = 'Fair or poor health crude prevalence (%)'
-total_change_ph = sum(final_deltas[d] * coefficients[poor_health_col][d] for d in drivers)
-raw_ph = baseline_data[poor_health_col] + (total_change_ph * DAMPING_FACTOR)
-avg_others = np.mean([predicted_values[o] for o in disease_outcomes])
-
-predicted_values[poor_health_col] = max(avg_others * 0.8, (raw_ph * 0.4 + avg_others * 0.6))
+    # Special logic: if all factors are zero, outcomes should drop to zero
+    if all_zero_except_income:
+        predicted_values[outcome] = 0.0
+    else:
+        # Standard calculation
+        predicted = baseline_data[outcome] + (total_change * effective_damping)
+        # Ensure it doesn't go to zero unless factors are zero
+        predicted_values[outcome] = max(0.1, predicted) if baseline_data[outcome] > 0 else 0.0
 
 # --- 8. Visualizations ---
 results = []
@@ -219,6 +214,7 @@ for i, outcome in enumerate(outcomes):
     pred = predicted_values[outcome]
     diff = pred - base
     
+    # Logic to handle the gray 0.0% delta
     delta_val = f"{diff:.1f}%" if abs(diff) > 0.05 else None
     
     with cols[i]:
@@ -230,4 +226,4 @@ for i, outcome in enumerate(outcomes):
         )
 
 st.markdown("---")
-st.caption("*Note: This model uses weighted interdependencies and non-zero floor logic. Poor Health is modeled as a composite to reflect systemic complexity.*")
+st.caption("*Note: This simulator uses a conservative damping factor and weighted interdependencies. Health outcomes are programmed to reach zero only when all social determinants are addressed.*")
