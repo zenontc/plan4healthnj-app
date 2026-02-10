@@ -25,15 +25,14 @@ drivers = [
     'Social isolation crude prevalence (%)'
 ]
 
-# Note: Poor Health is handled separately as a composite
-core_outcomes = [
+outcomes = [
     'Obesity crude prevalence (%)',
     'Diabetes crude prevalence (%)',
     'Frequnt physical distress crude prevalence (%)', 
     'Depression crude prevalence (%)',
-    'Frequent mental distress crude prevalence (%)'
+    'Frequent mental distress crude prevalence (%)',
+    'Fair or poor health crude prevalence (%)'
 ]
-outcomes = core_outcomes + ['Fair or poor health crude prevalence (%)']
 
 # --- 3. Helper Functions ---
 def get_clean_label(col):
@@ -48,7 +47,7 @@ def get_clean_label(col):
         return mapping[col]
     return col.replace(" crude prevalence (%)", " (%)")
 
-# --- 4. Regression Engine (Used for weighting factors) ---
+# --- 4. Regression Engine ---
 @st.cache_resource
 def get_coefficients(_df, _drivers, _outcomes):
     coeffs = {}
@@ -57,23 +56,29 @@ def get_coefficients(_df, _drivers, _outcomes):
         for driver in _drivers:
             temp_df = _df[[driver, outcome]].dropna()
             if not temp_df.empty:
-                model = LinearRegression().fit(temp_df[[driver]], temp_df[outcome])
-                coeffs[outcome][driver] = abs(model.coef_[0]) # Use magnitude for weighting
+                X = temp_df[[driver]]
+                y = temp_df[outcome]
+                model = LinearRegression().fit(X, y)
+                coeffs[outcome][driver] = model.coef_[0]
             else:
-                coeffs[outcome][driver] = 0.1
+                coeffs[outcome][driver] = 0.0
     return coeffs
 
-coefficients = get_coefficients(df, drivers, core_outcomes)
+coefficients = get_coefficients(df, drivers, outcomes)
 
 # --- 5. UI Layout ---
 st.set_page_config(layout="wide", page_title="NJ Planning and Public Health Tool")
 st.title("NJ Municipal Planning and Public Health Tool")
+st.markdown("""
+This tool models how changes in factors that can be impacted through Planning might impact public health outcomes in New Jersey municipalities.
+""")
 
-# Sidebar: Select Municipality
 st.sidebar.header("1. Select Municipality")
 muni_list = sorted(df['Municipality and County'].unique())
+
 if 'last_muni' not in st.session_state:
     st.session_state.last_muni = muni_list[0]
+
 selected_muni = st.sidebar.selectbox("Choose a Municipality:", muni_list)
 
 if selected_muni != st.session_state.last_muni:
@@ -84,91 +89,83 @@ if selected_muni != st.session_state.last_muni:
 
 baseline_data = df[df['Municipality and County'] == selected_muni].iloc[0]
 
-# Sidebar: Drivers
 st.sidebar.header("2. Adjust Factors")
+st.sidebar.markdown("Use sliders to show changes. Values are the percentage of the population affected.")
+
 if st.sidebar.button("Reset to Baseline"):
     for d in drivers:
         st.session_state[f"slider_{d}"] = float(baseline_data[d])
 
-current_values = {}
+slider_vals = {}
 for driver in drivers:
-    base_val = float(baseline_data[driver])
+    current_val = float(baseline_data[driver])
     if "Income" in driver:
-        min_v, max_v, step, fmt = 0.0, float(df[driver].max() * 1.5), 1000.0, "$%.0f"
+        min_v, max_v, step = 0.0, float(df[driver].max() * 1.5), 1000.0
+        fmt = "$%.0f"
     elif "Crime Index" in driver:
-        min_v, max_v, step, fmt = 0.0, max(float(df[driver].max()), base_val * 2), 0.1, "%.1f"
+        min_v, max_v, step = 0.0, max(float(df[driver].max()), current_val * 2), 0.1
+        fmt = "%.1f"
     else:
-        min_v, max_v, step, fmt = 0.0, 100.0, 0.1, "%.1f%%"
+        min_v, max_v, step = 0.0, max(float(df[driver].max()), current_val * 2), 0.1
+        fmt = "%.1f%%"
 
     if f"slider_{driver}" not in st.session_state:
-        st.session_state[f"slider_{driver}"] = base_val
+        st.session_state[f"slider_{driver}"] = current_val
 
-    current_values[driver] = st.sidebar.slider(get_clean_label(driver), min_v, max_v, key=f"slider_{driver}", step=step, format=fmt)
+    slider_vals[driver] = st.sidebar.slider(
+        get_clean_label(driver),
+        min_value=min_v,
+        max_value=max_v,
+        key=f"slider_{driver}",
+        step=step,
+        format=fmt
+    )
 
-# --- 6. Inter-Driver Logic (Ripple Effects) ---
-# We calculate a "Effective Delta" for each driver
-effective_values = current_values.copy()
-# Transp impacts Activity and Food
-effective_values['Physical inactivity crude prevalence (%)'] += (current_values['Transportation barriers crude prevalence (%)'] - baseline_data['Transportation barriers crude prevalence (%)']) * 0.2
-effective_values['Food insecurity crude prevalence (%)'] += (current_values['Transportation barriers crude prevalence (%)'] - baseline_data['Transportation barriers crude prevalence (%)']) * 0.2
+# --- 6. Calculation Logic ---
+# Logic: If all factors except Income are 0, or all factors are 0, results must be 0.
+# We use a "Presence Factor" to scale the results.
+non_income_drivers = [d for d in drivers if "Income" not in d]
+current_sum = sum([slider_vals[d] for d in non_income_drivers])
+baseline_sum = sum([baseline_data[d] for d in non_income_drivers])
 
-# --- 7. Conservative Proportional Calculation ---
+# Ratio of current environment vs baseline environment
+presence_ratio = (current_sum / baseline_sum) if baseline_sum > 0 else 0
+
 predicted_values = {}
+DAMPING_FACTOR = 0.25 # More conservative
 
-for outcome in core_outcomes:
-    # 1. Calculate weighted influence of each driver
-    total_impact_score = 0
-    baseline_impact_score = 0
-    
+for outcome in outcomes:
+    total_delta = 0
     for driver in drivers:
-        if "Income" in driver: continue # Income acts as a secondary scaler
+        coeff = coefficients[outcome][driver]
         
-        weight = coefficients[outcome][driver]
-        # Boost specific relationships
-        if outcome == 'Obesity crude prevalence (%)' and driver == 'Physical inactivity crude prevalence (%)': weight *= 3.0
-        if outcome == 'Diabetes crude prevalence (%)' and driver == 'Physical inactivity crude prevalence (%)': weight *= 2.5
-        if outcome == 'Depression crude prevalence (%)' and driver == 'Social isolation crude prevalence (%)': weight *= 3.0
-        
-        total_impact_score += max(0, effective_values[driver]) * weight
-        baseline_impact_score += max(0.1, baseline_data[driver]) * weight
+        # Apply specific logic boosts
+        weight = 1.0
+        if driver == 'Physical inactivity crude prevalence (%)' and outcome in ['Obesity crude prevalence (%)', 'Diabetes crude prevalence (%)']:
+            weight = 1.8
+        if driver == 'Social isolation crude prevalence (%)' and outcome == 'Depression crude prevalence (%)':
+            weight = 2.0
+            
+        delta = (slider_vals[driver] - baseline_data[driver]) * weight
+        total_delta += delta * coeff
+
+    # Composite buffer for Poor Health (makes it harder to move)
+    if outcome == 'Fair or poor health crude prevalence (%)':
+        total_delta *= 0.5 
+
+    # Calculate predicted value
+    raw_simulated = baseline_data[outcome] + (total_delta * DAMPING_FACTOR)
     
-    # 2. Multiplier represents the aggregate improvement/decline
-    multiplier = total_impact_score / baseline_impact_score
+    # Apply Presence Scaling: If factors are reduced to 0, outcome reduces to 0.
+    # We use a power function so it stays conservative until the very end.
+    final_val = raw_simulated * (presence_ratio ** 0.5)
     
-    # 3. Apply Income scaling (Higher income dampens the multiplier slightly)
-    income_ratio = baseline_data['Median HH Income'] / max(1, current_values['Median HH Income'])
-    multiplier = multiplier * (0.8 + 0.2 * income_ratio)
-    
-    # 4. Conservative Damping
-    final_multiplier = 1.0 + ((multiplier - 1.0) * 0.4)
-    predicted_values[outcome] = baseline_data[outcome] * final_multiplier
+    predicted_values[outcome] = max(0, final_val)
 
-# --- 8. Poor Health Composite Logic ---
-# Poor health is the weighted average of core outcomes to ensure it doesn't zero out prematurely
-avg_outcome_change = sum(predicted_values[o] for o in core_outcomes) / sum(baseline_data[o] for o in core_outcomes)
-predicted_values['Fair or poor health crude prevalence (%)'] = baseline_data['Fair or poor health crude prevalence (%)'] * avg_outcome_change
-
-# --- 9. Visualizations & Metrics ---
-results_df = pd.DataFrame([{
-    "Measure": get_clean_label(o).replace(" (%)", ""),
-    "Baseline": baseline_data[o],
-    "Simulated": predicted_values[o]
-} for o in outcomes])
-
-fig = go.Figure()
-fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Baseline"], name='Baseline', marker_color='lightslategray'))
-fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Simulated"], name='Simulated', marker_color='royalblue'))
-fig.update_layout(title=f"Projected Health Outcomes: {selected_muni}", yaxis_title="Prevalence (%)", barmode='group', height=500)
-st.plotly_chart(fig, use_container_width=True)
-
-st.subheader("Detailed Projections")
-cols = st.columns(len(outcomes))
-for i, outcome in enumerate(outcomes):
-    base, pred = baseline_data[outcome], predicted_values[outcome]
-    diff = pred - base
-    delta_val = f"{diff:.1f}%" if abs(diff) > 0.05 else None
-    with cols[i]:
-        st.metric(label=get_clean_label(outcome), value=f"{pred:.1f}%", delta=delta_val, delta_color="inverse")
-
-st.markdown("---")
-st.caption("*Note: This model uses proportional scaling and interdependency logic. Outcomes are tied to the aggregate state of all planning factors to ensure conservative and realistic simulations.*")
+# --- 7. Visualizations ---
+results = []
+for outcome in outcomes:
+    results.append({
+        "Measure": get_clean_label(outcome).replace(" (%)", ""),
+        "Baseline": baseline_data[outcome],
+        "Sim
