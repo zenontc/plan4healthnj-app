@@ -174,4 +174,12 @@ st.plotly_chart(fig, use_container_width=True)
 # --- 9. Metrics Table ---
 st.subheader("Detailed Projections")
 cols = st.columns(len(outcomes))
-for i, outcome in enumerate(
+for i, outcome in enumerate(outcomes):
+    diff = predicted_values[outcome] - baseline_data[outcome]
+    delta_val = f"{diff:.1f}%" if abs(diff) > 0.01 else None
+    with cols[i]:
+        st.metric(label=get_clean_label(outcome), value=f"{predicted_values[outcome]:.1f}%", 
+                  delta=delta_val, delta_color="inverse")
+
+st.markdown("---")
+st.caption("*Note: Outcomes are linked through a ratio-based logic. Health improvements are capped by socioeconomic baselines unless all social drivers are addressed.*")
