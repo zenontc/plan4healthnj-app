@@ -69,6 +69,9 @@ coefficients = get_coefficients(df, drivers, outcomes)
 # --- 5. UI Layout ---
 st.set_page_config(layout="wide", page_title="NJ Planning and Public Health Tool")
 st.title("NJ Municipal Planning and Public Health Tool")
+st.markdown("""
+This tool models how changes in factors that can be impacted through Planning might impact public health outcomes in New Jersey municipalities.
+""")
 
 # Sidebar: Select Municipality
 st.sidebar.header("1. Select Municipality")
@@ -89,15 +92,18 @@ baseline_data = df[df['Municipality and County'] == selected_muni].iloc[0]
 
 # Sidebar: Drivers
 st.sidebar.header("2. Adjust Factors")
-st.sidebar.markdown("Use sliders to show changes. Physical Inactivity to Social Isolation factors are the percentage of the population over 18 affected.")
+st.sidebar.markdown("Use sliders to show changes. Physical Inactivity to Social Isolation factors represent the percentage of the population affected.")
 
 if st.sidebar.button("Reset to Baseline"):
     for d in drivers:
         st.session_state[f"slider_{d}"] = float(baseline_data[d])
 
-slider_values = {}
+current_slider_values = {}
+adjustment_deltas = {}
+
 for driver in drivers:
     current_val = float(baseline_data[driver])
+    
     if "Income" in driver:
         min_v, max_v, step = 0.0, float(df[driver].max() * 1.5), 1000.0
         fmt = "$%.0f"
@@ -111,75 +117,117 @@ for driver in drivers:
     if f"slider_{driver}" not in st.session_state:
         st.session_state[f"slider_{driver}"] = current_val
 
-    slider_values[driver] = st.sidebar.slider(
+    val = st.sidebar.slider(
         get_clean_label(driver),
-        min_value=min_v, max_value=max_v,
-        key=f"slider_{driver}", step=step, format=fmt
+        min_value=min_v,
+        max_value=max_v,
+        key=f"slider_{driver}",
+        step=step,
+        format=fmt
     )
+    current_slider_values[driver] = val
+    adjustment_deltas[driver] = val - current_val
 
-# --- 6. Inter-Driver Logic (The "Ripple" Effect) ---
-# We calculate how much the user has moved the slider relative to baseline
-deltas = {d: slider_values[d] - baseline_data[d] for d in drivers}
+# --- 6. Inter-Driver & Interrelated Logic ---
+final_deltas = adjustment_deltas.copy()
 
-# Ripple: Transport affects Food, Activity, and Social
-deltas['Food insecurity crude prevalence (%)'] += deltas['Transportation barriers crude prevalence (%)'] * 0.2
-deltas['Physical inactivity crude prevalence (%)'] += deltas['Transportation barriers crude prevalence (%)'] * 0.2
-deltas['Social isolation crude prevalence (%)'] += deltas['Transportation barriers crude prevalence (%)'] * 0.1
+# Ripple Effects
+final_deltas['Food insecurity crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.2
+final_deltas['Physical inactivity crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.2
+final_deltas['Social isolation crude prevalence (%)'] += adjustment_deltas['Transportation barriers crude prevalence (%)'] * 0.1
 
-# Ripple: Income affects Housing/Food
-income_impact = (slider_values['Median HH Income'] - baseline_data['Median HH Income']) / 10000
-deltas['Housing insecurity crude prevalence (%)'] -= income_impact * 0.4
-deltas['Food insecurity crude prevalence (%)'] -= income_impact * 0.2
+income_delta_scaled = adjustment_deltas['Median HH Income'] / 10000 
+final_deltas['Housing insecurity crude prevalence (%)'] -= income_delta_scaled * 0.3
+final_deltas['Food insecurity crude prevalence (%)'] -= income_delta_scaled * 0.2
 
-# --- 7. Conservative Calculation & Floor Logic ---
+crime_delta_scaled = adjustment_deltas['Crime Index'] / 10
+final_deltas['Physical inactivity crude prevalence (%)'] += crime_delta_scaled * 0.15
+
+# --- 7. Calculate Outcomes with Damping and Floor Logic ---
+DAMPING_FACTOR = 0.3 # More conservative
 predicted_values = {}
-DAMPING = 0.4
 
-# Check if all non-income factors are zeroed out
-social_factors = [d for d in drivers if "Income" not in d]
-all_social_zero = all(slider_values[d] <= 0.05 for d in social_factors)
+# Calculate disease-specific outcomes first
+disease_outcomes = [o for o in outcomes if "Fair or poor health" not in o]
 
-for outcome in outcomes:
-    total_impact = 0
+for outcome in disease_outcomes:
+    total_change = 0
     for driver in drivers:
         coeff = coefficients[outcome][driver]
-        total_impact += deltas[driver] * coeff
+        
+        # Boosted Relationships
+        if "Physical inactivity" in driver and ("Obesity" in outcome or "Diabetes" in outcome):
+            coeff *= 1.5 
+        if "Social isolation" in driver and "Depression" in outcome:
+            coeff *= 1.8
+            
+        total_change += final_deltas[driver] * coeff
     
-    # Apply damping to the change
-    change = total_impact * DAMPING
-    new_val = baseline_data[outcome] + change
+    raw_pred = baseline_data[outcome] + (total_change * DAMPING_FACTOR)
     
-    # Logic: Outcomes only go to 0 if social factors are 0 AND Income is high
-    if all_social_zero:
-        # If social factors are zero, the outcome approaches zero 
-        # based on how much Income has increased.
-        income_ratio = slider_values['Median HH Income'] / max(df['Median HH Income'])
-        new_val = max(0, new_val * (1 - income_ratio * 0.5)) if new_val > 0 else 0
+    # Floor Logic: Calculate if all factors (excluding income) are zero
+    social_factors_sum = sum(current_slider_values[d] for d in drivers if "Income" not in d)
     
-    predicted_values[outcome] = max(0, new_val)
+    if social_factors_sum <= 0.1:
+        # If social factors are zeroed, health follows income scaling
+        income_ratio = current_slider_values['Median HH Income'] / max(df['Median HH Income'])
+        predicted_values[outcome] = raw_pred * (1 - income_ratio)
+    else:
+        # Ensure health doesn't drop below 10% of baseline unless factors are zeroed
+        predicted_values[outcome] = max(baseline_data[outcome] * 0.1, raw_pred)
+
+# Composite Calculation for Poor Health
+# It is 40% its own regression and 60% the average of other outcomes to prevent premature zeroing
+poor_health_col = 'Fair or poor health crude prevalence (%)'
+total_change_ph = sum(final_deltas[d] * coefficients[poor_health_col][d] for d in drivers)
+raw_ph = baseline_data[poor_health_col] + (total_change_ph * DAMPING_FACTOR)
+avg_others = np.mean([predicted_values[o] for o in disease_outcomes])
+
+predicted_values[poor_health_col] = max(avg_others * 0.8, (raw_ph * 0.4 + avg_others * 0.6))
 
 # --- 8. Visualizations ---
-results_df = pd.DataFrame([{
-    "Measure": get_clean_label(o).replace(" (%)", ""),
-    "Baseline": baseline_data[o],
-    "Simulated": predicted_values[o]
-} for o in outcomes])
+results = []
+for outcome in outcomes:
+    results.append({
+        "Measure": get_clean_label(outcome).replace(" (%)", ""),
+        "Baseline": baseline_data[outcome],
+        "Simulated": predicted_values[outcome]
+    })
+    
+results_df = pd.DataFrame(results)
 
 fig = go.Figure()
 fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Baseline"], name='Baseline', marker_color='lightslategray'))
 fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Simulated"], name='Simulated', marker_color='royalblue'))
-fig.update_layout(title=f"Projected Health Outcomes: {selected_muni}", barmode='group', height=500)
+
+fig.update_layout(
+    title=f"Projected Health Outcomes: {selected_muni}",
+    yaxis_title="Prevalence (%)",
+    barmode='group',
+    height=500,
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+)
+
 st.plotly_chart(fig, use_container_width=True)
 
 # --- 9. Metrics Table ---
 st.subheader("Detailed Projections")
 cols = st.columns(len(outcomes))
+
 for i, outcome in enumerate(outcomes):
-    diff = predicted_values[outcome] - baseline_data[outcome]
-    delta_val = f"{diff:.1f}%" if abs(diff) > 0.01 else None
+    base = baseline_data[outcome]
+    pred = predicted_values[outcome]
+    diff = pred - base
+    
+    delta_val = f"{diff:.1f}%" if abs(diff) > 0.05 else None
+    
     with cols[i]:
-        st.metric(label=get_clean_label(outcome), value=f"{predicted_values[outcome]:.1f}%", 
-                  delta=delta_val, delta_color="inverse")
+        st.metric(
+            label=get_clean_label(outcome),
+            value=f"{pred:.1f}%",
+            delta=delta_val,
+            delta_color="inverse"
+        )
 
 st.markdown("---")
-st.caption("*Note: Outcomes are linked through a ratio-based logic. Health improvements are capped by socioeconomic baselines unless all social drivers are addressed.*")
+st.caption("*Note: This model uses weighted interdependencies and non-zero floor logic. Poor Health is modeled as a composite to reflect systemic complexity.*")
