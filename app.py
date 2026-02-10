@@ -168,4 +168,25 @@ for outcome in outcomes:
     results.append({
         "Measure": get_clean_label(outcome).replace(" (%)", ""),
         "Baseline": baseline_data[outcome],
-        "Sim
+        "Simulated": predicted_values[outcome]
+    })
+results_df = pd.DataFrame(results)
+
+fig = go.Figure()
+fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Baseline"], name='Baseline', marker_color='lightslategray'))
+fig.add_trace(go.Bar(x=results_df["Measure"], y=results_df["Simulated"], name='Simulated', marker_color='royalblue'))
+fig.update_layout(title=f"Projected Health Outcomes: {selected_muni}", yaxis_title="Prevalence (%)", barmode='group', height=500, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+st.plotly_chart(fig, use_container_width=True)
+
+# --- 8. Metrics Table ---
+st.subheader("Detailed Projections")
+cols = st.columns(len(outcomes))
+for i, outcome in enumerate(outcomes):
+    base, pred = baseline_data[outcome], predicted_values[outcome]
+    diff = pred - base
+    delta_val = f"{diff:.1f}%" if abs(diff) > 0.05 else None # Start grayed out/no arrow for tiny changes
+    with cols[i]:
+        st.metric(label=get_clean_label(outcome), value=f"{pred:.1f}%", delta=delta_val, delta_color="inverse")
+
+st.markdown("---")
+st.caption("*Note: This model uses a conservative decay function. Outcomes are proportionally tied to environmental drivers; if all environmental factors reach zero, the model projects a zero-prevalence scenario.*")
